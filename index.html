@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shape Hunter</title>
+<style>
+body { margin:0; overflow:hidden; font-family:Arial, sans-serif; background:#e0f7fa; user-select:none; }
+canvas { position:absolute; top:0; left:0; z-index:1; }
+#levelSelect {
+  position:absolute; top:50%; left:50%;
+  transform:translate(-50%, -50%);
+  font-size:24px;
+  background:rgba(255,255,255,0.95);
+  padding:20px; border-radius:15px; text-align:center;
+  z-index:10;
+}
+button { font-size:20px; margin:10px; padding:10px 20px; cursor:pointer; }
+</style>
+</head>
+<body>
+
+<div id="levelSelect">
+<h2>Select Level</h2>
+<button onclick="startGame(1)">Level 1: Easy</button>
+<button onclick="startGame(2)">Level 2: Medium</button>
+<button onclick="startGame(3)">Level 3: 3D Shapes</button>
+</div>
+
+<audio id="ding" src="https://freesound.org/data/previews/522/522858_9454746-lq.mp3"></audio>
+<audio id="chime" src="https://freesound.org/data/previews/348/348411_3248244-lq.mp3"></audio>
+<audio id="superMario" src="SuperMario.mp3" preload="auto"></audio>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+const canvas=document.getElementById('gameCanvas');
+const ctx=canvas.getContext('2d');
+canvas.width=window.innerWidth; canvas.height=window.innerHeight;
+
+const ding=document.getElementById('ding');
+const chime=document.getElementById('chime');
+const superMario=document.getElementById('superMario');
+ding.volume=0.5; chime.volume=0.5; superMario.volume=0.6;
+
+let level=1, score=0, timeLeft=60;
+let shapes=[], sparkles=[], wrongClicks=[];
+let restartButton=null;
+const numShapes=6, shapeSize=80;
+let speed=1.125; 
+let timerInterval; let gameOver=false;
+const boxWidth=canvas.width*0.9;
+const boxHeight=canvas.height*0.9;
+const boxX=(canvas.width-boxWidth)/2;
+const boxY=(canvas.height-boxHeight)/2;
+const infoBoxHeight=50;
+let pulseTime=0;
+let targetShape='';
+let mouseX=0, mouseY=0;
+
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  mouseX = e.clientX - rect.left;
+  mouseY = e.clientY - rect.top;
+});
+
+const pastelColors=['rgba(255,179,186,1)','rgba(255,223,186,1)','rgba(255,255,186,1)','rgba(186,255,201,1)','rgba(186,225,255,1)'];
+
+const levelShapes = {
+  1: ['triangle','circle','square','rectangle','rhombus','heart'],
+  2: ['pentagon','hexagon','octagon','oval','trapezoid','star'],
+  3: ['cone','cube','sphere','rectangleprism','triangleprism','pyramid','torus','cylinder','hemisphere']
+};
+
+// Preload Level 3 images
+const level3Images = {};
+levelShapes[3].forEach(name => {
+    const img = new Image();
+    img.src = name + '.png';
+    img.onload = () => console.log(name + ' loaded');
+    img.onerror = () => console.error('Failed to load ' + name);
+    level3Images[name] = img;
+});
+
+function randomInt(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+
+function createSparkles(x,y){
+  for(let i=0;i<20;i++){
+    let angle=Math.random()*2*Math.PI, spd=Math.random()*3+1;
+    sparkles.push({x,y,vx:Math.cos(angle)*spd,vy:Math.sin(angle)*spd,life:30+randomInt(0,15),color:`hsl(${Math.random()*360},100%,70%)`});
+  }
+}
+
+function generateShapes(){
+  shapes=[]; wrongClicks=[];
+  let positions=[];
+  let currentShapes=levelShapes[level] || levelShapes[1];
+  currentShapes=currentShapes.sort(()=>0.5-Math.random()).slice(0,numShapes);
+  targetShape=currentShapes[randomInt(0,currentShapes.length-1)];
+  
+  for(let i=0;i<numShapes;i++){
+    let shape=(currentShapes[i]===targetShape)?targetShape:currentShapes[i];
+    let color=pastelColors[randomInt(0,pastelColors.length-1)];
+    let x,y,tries=0;
+    do{
+      x=randomInt(boxX+shapeSize,boxX+boxWidth-shapeSize);
+      y=randomInt(boxY+infoBoxHeight+shapeSize,boxY+boxHeight-shapeSize);
+      tries++;
+    } while(positions.some(p=>Math.hypot(p.x-x,p.y-y)<shapeSize*2)&&tries<100);
+    positions.push({x,y});
+    let angle=Math.random()*2*Math.PI;
+    let vx=Math.cos(angle)*speed, vy=Math.sin(angle)*speed;
+    shapes.push({x,y,vx,vy,shape,correct:shape===targetShape,color});
+  }
+
+  let utterance = new SpeechSynthesisUtterance(targetShape);
+  speechSynthesis.speak(utterance);
+}
+
+function updateShapes(){
+  if(gameOver) return;
+  for(let i=0;i<shapes.length;i++){
+    let s=shapes[i];
+    s.vx+=(Math.random()-0.5)*0.05;
+    s.vy+=(Math.random()-0.5)*0.05;
+    let mag=Math.hypot(s.vx,s.vy);
+    if(mag>speed){s.vx=(s.vx/mag)*speed;s.vy=(s.vy/mag)*speed;}
+    s.x+=s.vx; s.y+=s.vy;
+
+    if(s.x<boxX+shapeSize){s.x=boxX+shapeSize;s.vx*=-1;}
+    if(s.x>boxX+boxWidth-shapeSize){s.x=boxX+boxWidth-shapeSize;s.vx*=-1;}
+    if(s.y<boxY+infoBoxHeight+shapeSize){s.y=boxY+infoBoxHeight+shapeSize;s.vy*=-1;}
+    if(s.y>boxY+boxHeight-shapeSize){s.y=boxY+boxHeight-shapeSize;s.vy*=-1;}
+
+    for(let j=i+1;j<shapes.length;j++){
+      let s2=shapes[j]; let dx=s2.x-s.x; let dy=s2.y-s.y;
+      let dist=Math.hypot(dx,dy); let minDist=shapeSize*2;
+      if(dist<minDist){
+        let angle=Math.atan2(dy,dx); let overlap=minDist-dist;
+        s.x-=Math.cos(angle)*overlap/2; s.y-=Math.sin(angle)*overlap/2;
+        s2.x+=Math.cos(angle)*overlap/2; s2.y+=Math.sin(angle)*overlap/2;
+        s.vx*=-0.8; s.vy*=-0.8; s2.vx*=-0.8; s2.vy*=-0.8;
+      }
+    }
+  }
+  for(let i=sparkles.length-1;i>=0;i--){ let sp=sparkles[i]; sp.x+=sp.vx; sp.y+=sp.vy; sp.life--; if(sp.life<=0)sparkles.splice(i,1); }
+}
+
+function drawShape(s){
+    ctx.save(); ctx.translate(s.x,s.y);
+    if(level === 3){
+        const img = level3Images[s.shape];
+        if(img.complete){ ctx.drawImage(img,-shapeSize,-shapeSize,shapeSize*2,shapeSize*2); }
+    } else {
+        ctx.fillStyle=s.color; ctx.strokeStyle='black'; ctx.lineWidth=3;
+        switch(s.shape){
+            case 'circle': ctx.beginPath(); ctx.arc(0,0,shapeSize,0,2*Math.PI); ctx.fill(); ctx.stroke(); break;
+            case 'triangle': ctx.beginPath(); ctx.moveTo(0,-shapeSize); ctx.lineTo(shapeSize,shapeSize); ctx.lineTo(-shapeSize,shapeSize); ctx.closePath(); ctx.fill(); ctx.stroke(); break;
+            case 'rectangle': ctx.fillRect(-shapeSize*1.5,-shapeSize,shapeSize*3,shapeSize*2); ctx.strokeRect(-shapeSize*1.5,-shapeSize,shapeSize*3,shapeSize*2); break;
+            case 'square': ctx.fillRect(-shapeSize,-shapeSize,shapeSize*2,shapeSize*2); ctx.strokeRect(-shapeSize,-shapeSize,shapeSize*2,shapeSize*2); break;
+            case 'star': drawStar(ctx,0,0,5,shapeSize,shapeSize/2); break;
+            case 'heart': drawHeart(ctx,0,0,shapeSize); break;
+            case 'crescent': drawCrescent(ctx,0,0,shapeSize); break;
+            case 'rhombus': drawRhombus(ctx,0,0,shapeSize); break;
+            case 'pentagon': drawPolygon(ctx,0,0,5,shapeSize); break;
+            case 'hexagon': drawPolygon(ctx,0,0,6,shapeSize); break;
+            case 'octagon': drawPolygon(ctx,0,0,8,shapeSize); break;
+            case 'oval': drawOval(ctx,0,0,shapeSize,shapeSize*0.6); break;
+            case 'trapezoid': drawTrapezoid(ctx,0,0,shapeSize); break;
+        }
+    }
+    ctx.restore();
+}
+
+// Drawing helpers (same as before)
+function drawStar(ctx,x,y,points,outerR,innerR){ ctx.beginPath(); for(let i=0;i<2*points;i++){ let r=i%2===0?outerR:innerR; let a=i*Math.PI/points-Math.PI/2; let px=x+r*Math.cos(a); let py=y+r*Math.sin(a); if(i===0)ctx.moveTo(px,py); else ctx.lineTo(px,py);} ctx.closePath(); ctx.fill(); ctx.stroke();}
+function drawHeart(ctx,x,y,size){ ctx.beginPath(); ctx.moveTo(x,y+size/4); ctx.bezierCurveTo(x,y-size/2,x+size,x-size/2,x,x+size); ctx.bezierCurveTo(x-size,x-size/2,x,y-size/2,x,y+size/4); ctx.fill(); ctx.stroke();}
+function drawCrescent(ctx,x,y,r){ ctx.beginPath(); ctx.arc(x,y,r,Math.PI/4,Math.PI*7/4); ctx.arc(x+r/2,y,-r,Math.PI*7/4,Math.PI/4,true); ctx.closePath(); ctx.fill(); ctx.stroke();}
+function drawRhombus(ctx,x,y,r){ ctx.beginPath(); ctx.moveTo(x, y-r); ctx.lineTo(x+r/2,y); ctx.lineTo(x,y+r); ctx.lineTo(x-r/2,y); ctx.closePath(); ctx.fill(); ctx.stroke();}
+function drawPolygon(ctx,x,y,sides,r){ ctx.beginPath(); for(let i=0;i<sides;i++){ let a=i*2*Math.PI/sides-Math.PI/2; let px=x+r*Math.cos(a); let py=y+r*Math.sin(a); if(i===0)ctx.moveTo(px,py); else ctx.lineTo(px,py);} ctx.closePath(); ctx.fill(); ctx.stroke();}
+function drawOval(ctx,x,y,rx,ry){ ctx.beginPath(); ctx.ellipse(x,y,rx,ry,0,0,2*Math.PI); ctx.fill(); ctx.stroke();}
+function drawTrapezoid(ctx,x,y,r){ ctx.beginPath(); ctx.moveTo(x-r*1.5,y+r); ctx.lineTo(x+r*1.5,y+r); ctx.lineTo(x+r,y-r); ctx.lineTo(x-r,y-r); ctx.closePath(); ctx.fill(); ctx.stroke();}
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  
+  ctx.fillStyle='rgba(255,255,255,0.8)';
+  ctx.fillRect(boxX,boxY,boxWidth,boxHeight);
+  ctx.strokeStyle='black'; ctx.lineWidth=4;
+  ctx.strokeRect(boxX,boxY,boxWidth,boxHeight);
+
+  ctx.fillStyle='rgba(255,255,255,0.9)'; ctx.fillRect(boxX,boxY,boxWidth,infoBoxHeight);
+  ctx.strokeRect(boxX,boxY,boxWidth,infoBoxHeight);
+
+  ctx.fillStyle='red'; ctx.font='24px Arial'; ctx.textAlign='left';
+  ctx.fillText(`Score: ${score}`, boxX+20, boxY+35);
+  ctx.textAlign='right'; ctx.fillText(`Time: ${timeLeft}`, boxX+boxWidth-20, boxY+35);
+
+  pulseTime+=0.05;
+  let r=Math.floor(255*(0.5+0.5*Math.sin(pulseTime)));
+  let b=Math.floor(255*(0.5+0.5*Math.cos(pulseTime)));
+  ctx.fillStyle=`rgb(${r},0,${b})`;
+  ctx.shadowColor='rgba(0,0,0,0.5)'; ctx.shadowBlur=10;
+  ctx.font='36px Arial'; ctx.textAlign='center'; ctx.fillText('SHAPE HUNTER', boxX+boxWidth/2, boxY+35);
+
+  shapes.forEach(s=>drawShape(s));
+
+  wrongClicks.forEach(w=>{
+    ctx.strokeStyle='red'; ctx.lineWidth=5;
+    ctx.beginPath(); ctx.moveTo(w.shape.x-shapeSize,w.shape.y-shapeSize); ctx.lineTo(w.shape.x+shapeSize,w.shape.y+shapeSize);
+    ctx.moveTo(w.shape.x+shapeSize,w.shape.y-shapeSize); ctx.lineTo(w.shape.x-shapeSize,w.shape.y+shapeSize);
+    ctx.stroke();
+  });
+
+  sparkles.forEach(sp=>{
+    ctx.beginPath(); ctx.arc(sp.x,sp.y,3,0,2*Math.PI); ctx.fillStyle=sp.color; ctx.fill();
+  });
+
+  // Floating target shape near mouse
+  const labelW=150,labelH=35;
+  ctx.fillStyle='rgba(255,255,255,0.9)'; ctx.strokeStyle='black'; ctx.lineWidth=2;
+  ctx.fillRect(mouseX+15, mouseY+15, labelW, labelH); ctx.strokeRect(mouseX+15, mouseY+15, labelW, labelH);
+  ctx.fillStyle='red'; ctx.font='20px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(targetShape.toUpperCase(), mouseX+15+labelW/2, mouseY+15+labelH/2);
+
+  if(gameOver){
+    const boxW=300, boxH=140; const boxXCenter=boxX+(boxWidth-boxW)/2; const boxYBottom=boxY+boxHeight-boxH-20;
+    ctx.fillStyle='rgba(255,255,255,0.9)'; ctx.fillRect(boxXCenter,boxYBottom,boxW,boxH); ctx.strokeStyle='black'; ctx.lineWidth=3; ctx.strokeRect(boxXCenter,boxYBottom,boxW,boxH);
+    ctx.fillStyle='red'; ctx.font='28px Arial'; ctx.textAlign='center';
+    ctx.fillText(`Time's up!`, boxXCenter+boxW/2, boxYBottom+40); ctx.fillText(`Your score: ${score}`, boxXCenter+boxW/2, boxYBottom+75);
+    const btnW=120, btnH=35; const btnX=boxXCenter+(boxW-btnW)/2; const btnY=boxYBottom+95;
+    ctx.fillStyle='#4CAF50'; ctx.fillRect(btnX,btnY,btnW,btnH); ctx.strokeRect(btnX,btnY,btnW,btnH);
+    ctx.fillStyle='white'; ctx.font='20px Arial'; ctx.fillText('Restart',btnX+btnW/2,btnY+btnH/2+7);
+    restartButton={x:btnX,y:btnY,w:btnW,h:btnH};
+  }
+}
+
+canvas.addEventListener('click',e=>{
+  const rect=canvas.getBoundingClientRect();
+  const x=e.clientX-rect.left, y=e.clientY-rect.top;
+  if(gameOver && restartButton && x>=restartButton.x && x<=restartButton.x+restartButton.w && y>=restartButton.y && y<=restartButton.y+restartButton.h){ resetGame(); return; }
+  shapes.forEach(s=>{
+    let dx=x-s.x, dy=y-s.y;
+    if(Math.hypot(dx,dy)<=shapeSize){
+      if(!gameOver){
+        if(s.correct){ score++; createSparkles(s.x,s.y); ding.play(); chime.play(); generateShapes(); wrongClicks=[]; }
+        else{ wrongClicks.push({shape:s}); }
+      }
+    }
+  });
+});
+
+function resetGame(){ gameOver=false; shapes=[]; wrongClicks=[]; sparkles=[]; score=0; timeLeft=60; restartButton=null; document.getElementById('levelSelect').style.display='block'; }
+
+function gameLoop(){ updateShapes(); draw(); requestAnimationFrame(gameLoop); }
+
+function startGame(selectedLevel){
+  level=selectedLevel; document.getElementById('levelSelect').style.display='none'; generateShapes(); gameLoop(); timeLeft=60;
+  timerInterval=setInterval(()=>{
+    timeLeft--;
+    if(timeLeft<=0 && !gameOver){
+      clearInterval(timerInterval); gameOver=true;
+      let utterance=new SpeechSynthesisUtterance(`Your final score is ${score}`);
+      speechSynthesis.speak(utterance);
+      utterance.onend = ()=> { superMario.play(); }
+    }
+  },1000);
+}
+</script>
+</body>
+</html>
